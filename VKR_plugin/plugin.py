@@ -61,14 +61,9 @@ def fixModelNodesCoordinatesIfNecessary(assembly, elements):
                 nodes=(node,),
                 coordinate1=newCoordinates[0], coordinate2=newCoordinates[1], coordinate3=newCoordinates[2]
             )
-            if newCoordinates != coordinates:
-                print "node changed:"
-                print coordinates
-                print newCoordinates
 
 
 def createIntermediateModel(lastModel, lastJob, part, material):
-    print 'createIntermediateModel'
     # Making the part correspond to the one from odb.
     intermediate_part_name = part.upper() + '-1'
 
@@ -126,15 +121,11 @@ def createIntermediateModel(lastModel, lastJob, part, material):
                                explicitPrecision=SINGLE, getMemoryFromAnalysis=True, historyPrint=OFF,
                                memory=90, memoryUnits=PERCENTAGE, model=intermediate_model_name, modelPrint=OFF,
                                multiprocessingMode=DEFAULT, name=job_name, nodalOutputPrecision=SINGLE,
-                               numCpus=4, numDomains=4, numGPUs=0, numThrseadsPerMpiProcess=1, queue=None,
+                               numCpus=4, numDomains=4, numGPUs=0, numThreadsPerMpiProcess=1, queue=None,
                                resultsFormat=ODB, scratch='', type=ANALYSIS, userSubroutine='', waitHours=
                                0, waitMinutes=0)
 
-    print 'before fixing'
-
     fixModelNodesCoordinatesIfNecessary(intermediate_assembly, elements)
-
-    print 'after fixing'
 
     intermidiate_job.submit(consistencyChecking=OFF)
     intermidiate_job.waitForCompletion()
@@ -144,7 +135,10 @@ def createIntermediateModel(lastModel, lastJob, part, material):
 
 def createNewModel(newModel, lastModel, lastJob, part, material):
     intermediate_model = createIntermediateModel(lastModel, lastJob, part, material)
-    print 'hello world!'
+    # intermediate_model = mdb.models[lastModel + '-intermediate']
+
+    old_part_name = part.upper() + '-1'
+
     new_model = mdb.Model(name=newModel, objectToCopy=intermediate_model)
     new_model.keywordBlock.synchVersions(storeNodesAndElements=False)
     sieBlocks = new_model.keywordBlock.sieBlocks
@@ -154,8 +148,31 @@ def createNewModel(newModel, lastModel, lastJob, part, material):
             stepBlock = block
             break
         blockCount += 1
-    new_model.keywordBlock.insert(blockCount,
-                                             '\n*MAP SOLUTION, UNBALANCED STRESS=STEP')
+    new_model.keywordBlock.insert(blockCount, '\n*MAP SOLUTION, UNBALANCED STRESS=STEP')
+
+    new_part = mdb.models[lastModel + '-intermediate'].parts[old_part_name]
+    new_part = mdb.models[newModel].Part2DGeomFrom2DMesh(name=part, part=new_part, featureAngle=0.0)
+    new_part.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=0.00012, constraint = FREE)
+    new_part.generateMesh()
+
+    section_name = 'Section-1'
+    new_part.SectionAssignment(
+        offset=0.0, offsetField='', offsetType=MIDDLE_SURFACE,
+        region=Region(elements=new_part.elements),
+        sectionName=section_name, thicknessAssignment=FROM_SECTION
+    )
+
+    predefinedFields = new_model.predefinedFields
+    for key in predefinedFields.keys():
+        del predefinedFields[key]
+
+    new_assembly = new_model.rootAssembly
+    del new_assembly.instances[old_part_name]
+    new_part_instance = new_assembly.Instance(dependent=ON, name=old_part_name,
+                                                                part=new_part)
+
+
+
     mdb.Job(atTime=None, contactPrint=OFF, description='', echoPrint=OFF,
             explicitPrecision=SINGLE, getMemoryFromAnalysis=True, historyPrint=OFF,
             memory=90, memoryUnits=PERCENTAGE, model=newModel, modelPrint=OFF,
@@ -163,6 +180,3 @@ def createNewModel(newModel, lastModel, lastJob, part, material):
             numCpus=1, numGPUs=0, numThreadsPerMpiProcess=1, queue=None, resultsFormat=
             ODB, scratch='', type=ANALYSIS, userSubroutine='', waitHours=0,
             waitMinutes=0)
-    predefinedFields = new_model.predefinedFields
-    for key in predefinedFields.keys():
-        del predefinedFields[key]
